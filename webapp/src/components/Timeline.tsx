@@ -33,7 +33,6 @@ export function Timeline() {
   const [playing, setPlaying] = useState(true);
   const [speedIdx, setSpeedIdx] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [eventFilters, setEventFilters] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const userScrollingRef = useRef(false);
   const userScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -228,6 +227,18 @@ export function Timeline() {
     scrollRef.current.scrollLeft = Math.max(0, nowX - scrollRef.current.clientWidth / 2);
   }, [start, pxPerMs]);
 
+  // Auto-recenter on playback when the app launches
+  const didAutoCenterRef = useRef(false);
+  useEffect(() => {
+    if (didAutoCenterRef.current) return;
+    didAutoCenterRef.current = true;
+    if (scrollRef.current) {
+      const playheadX = (useStore.getState().viewTime.getTime() - start.getTime()) * pxPerMs;
+      programmaticScrollRef.current = true;
+      scrollRef.current.scrollLeft = Math.max(0, playheadX - scrollRef.current.clientWidth / 2);
+    }
+  }, [start, pxPerMs]);
+
   // ── Order event drag handlers ──────────────────────────────
   const xToTime = useCallback((clientX: number): number => {
     if (!scrollRef.current) return 0;
@@ -330,7 +341,6 @@ export function Timeline() {
 
   const visibleEvents = events.filter(ev => {
     if (orderEventIds.has(ev.id)) return false; // shown in order group, don't duplicate
-    if (eventFilters.size > 0 && !eventFilters.has(ev.type)) return false;
     if (ev.truck_id && !isHidden('truck', ev.truck_id)) return true;
     if (ev.load_id && !isHidden('load', ev.load_id)) return true;
     if (ev.trailer_id && !isHidden('trailer', ev.trailer_id)) return true;
@@ -420,20 +430,6 @@ export function Timeline() {
   return (
     <div className="monitor-timeline" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div className="timeline-bar" style={{ position: 'relative' }}>
-        {/* Event type filters */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          {Object.entries(EVENT_COLORS).map(([type, color]) => (
-            <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 2, cursor: 'pointer', fontSize: 9, color: 'var(--text-dim)' }}>
-              <input type="checkbox" checked={!eventFilters.has(type)} onChange={() => {
-                const next = new Set(eventFilters);
-                if (next.has(type)) next.delete(type); else next.add(type);
-                setEventFilters(next);
-              }} style={{ width: 'auto', accentColor: color }} />
-              <span style={{ width: 6, height: 6, borderRadius: 1, background: color }} />
-              {type}
-            </label>
-          ))}
-        </div>
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (playing) setPlaying(false); else setPlaying(true); }} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: playing ? 'var(--danger)' : 'var(--accent)', color: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0 }}>
           {playing ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>}

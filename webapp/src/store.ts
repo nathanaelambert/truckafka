@@ -610,7 +610,7 @@ export const useStore = create<AppState>((set, get) => ({
     const TRUCK_EMPTY = 8000;
     const TRAILER_EMPTY = 4000;
     const haulWeight = data.weight + TRUCK_EMPTY + TRAILER_EMPTY;
-    const haulStartTime = data.pickup_after.getTime() + HOUR_MS; // after 1h loading
+    const haulStartTime = data.pickup_after.getTime() + 90 * 60 * 1000; // after 1h30 loading
     let routeDurationMs = 2 * HOUR_MS;
     let routePath: { lat: number; lng: number }[] | undefined;
     let routeDistanceM = 0;
@@ -635,14 +635,16 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     // 3. Compute event times
+    const LOADING_DUR = 90 * 60 * 1000; // 1h30
+    const UNLOADING_DUR = 90 * 60 * 1000; // 1h30
     const pickupAfterMs = data.pickup_after.getTime();
     const dropoffAfterMs = data.dropoff_after.getTime();
     const loadingStart = pickupAfterMs;
-    const loadingEnd = loadingStart + HOUR_MS;
+    const loadingEnd = loadingStart + LOADING_DUR;
     const haulStart = loadingEnd;
     const haulEnd = haulStart + routeDurationMs;
     const unloadStart = dropoffAfterMs;
-    const unloadEnd = unloadStart + HOUR_MS;
+    const unloadEnd = unloadStart + UNLOADING_DUR;
 
     const noActors = { truck_id: null as string | null, driver_id: null as string | null, trailer_id: null as string | null };
     const incomingStatus = { status: 'incoming' as EventState };
@@ -799,23 +801,23 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    const ATTACH_DUR = 10 * 60 * 1000; // 10min
-    const DETACH_DUR = 10 * 60 * 1000;
+    const ATTACH_DUR = 30 * 60 * 1000; // 30min
+    const DETACH_DUR = 30 * 60 * 1000;
 
     const loadingStart = new Date(loading.start_time).getTime();
     const unloadingEnd = new Date(unloading.end_time).getTime();
 
-    // attach at home hub, 30min before deadmile starts
-    const deadmileToStart = loadingStart - deadmileDurationMs - 30 * 60 * 1000;
+    // attach at home hub, deadmile starts immediately after attach
+    const deadmileToStart = loadingStart - deadmileDurationMs;
     const attachStart = deadmileToStart - ATTACH_DUR;
     const attachEnd = attachStart + ATTACH_DUR;
 
-    // deadmile home → pickup
+    // deadmile home → pickup (ends exactly when loading starts)
     const deadmileToStart_t = attachEnd;
-    const deadmileToEnd = deadmileToStart_t + deadmileDurationMs;
+    const deadmileToEnd = loadingStart;
 
-    // deadmile dropoff → home (after unloading)
-    const deadmileBackStart = unloadingEnd + 15 * 60 * 1000;
+    // deadmile dropoff → home (starts immediately when unloading ends)
+    const deadmileBackStart = unloadingEnd;
     const deadmileBackEnd = deadmileBackStart + returnDurationMs;
 
     // detach at home hub
@@ -842,7 +844,7 @@ export const useStore = create<AppState>((set, get) => ({
       { id: uid(), type: 'haul', load_id: loadId, ...actors, ...incomingStatus,
         start_time: haul.start_time, end_time: haul.end_time,
         start_location_id: pickupLocId, end_location_id: dropoffLocId,
-        distance_m: haul.distance_m, duration_s: haul.duration_s },
+        path: haul.path, distance_m: haul.distance_m, duration_s: haul.duration_s },
       { id: uid(), type: 'unloading', load_id: loadId, ...actors, ...incomingStatus,
         start_time: unloading.start_time, end_time: unloading.end_time,
         start_location_id: dropoffLocId, end_location_id: dropoffLocId },
@@ -983,11 +985,11 @@ export const useStore = create<AppState>((set, get) => ({
     const incomingStatus = { status: 'incoming' as EventState };
 
     // Order 1: original pickup → hub (no dropoff window constraint)
-    const loading1End = new Date(order.pickup_after).getTime() + HOUR_MS;
+    const loading1End = new Date(order.pickup_after).getTime() + 90 * 60 * 1000;
     const haul1Start = loading1End;
     const haul1End = haul1Start + haul1DurationMs;
     const unload1Start = haul1End;
-    const unload1End = unload1Start + HOUR_MS;
+    const unload1End = unload1Start + 90 * 60 * 1000;
 
     const order1Events: OrderEvent[] = [
       { id: uid(), type: 'loading', load_id: order.load_id, ...incomingStatus, ...noActors,
@@ -1003,12 +1005,12 @@ export const useStore = create<AppState>((set, get) => ({
     ];
 
     // Order 2: hub → original dropoff (flexible pickup, original dropoff window)
-    const load2Start = Math.max(unload1End, new Date(order.dropoff_after).getTime() - haul2DurationMs - HOUR_MS);
-    const load2End = load2Start + HOUR_MS;
+    const load2Start = Math.max(unload1End, new Date(order.dropoff_after).getTime() - haul2DurationMs - 90 * 60 * 1000);
+    const load2End = load2Start + 90 * 60 * 1000;
     const haul2Start = load2End;
     const haul2End = haul2Start + haul2DurationMs;
     const unload2Start = Math.max(haul2End, new Date(order.dropoff_after).getTime());
-    const unload2End = unload2Start + HOUR_MS;
+    const unload2End = unload2Start + 90 * 60 * 1000;
 
     const order2Events: OrderEvent[] = [
       { id: uid(), type: 'loading', load_id: order.load_id, ...incomingStatus, ...noActors,
@@ -1408,7 +1410,7 @@ export const useStore = create<AppState>((set, get) => ({
     const existingEventIds = new Set(detentionAlerts.map(a => a.eventId));
 
     for (const order of orders) {
-      if (order.status === 'completed') continue;
+      if (order.status !== 'dispatched') continue; // only dispatched orders trigger detention
       for (const ev of order.events) {
         if (ev.type !== 'loading' && ev.type !== 'unloading') continue;
         const evStart = new Date(ev.start_time).getTime();

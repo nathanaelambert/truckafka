@@ -175,8 +175,7 @@ export function AssignOrderForm({ orderId, onClose }: { orderId: string; onClose
     }
   }, [orderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-select: when driver is selected and is on-duty at a hub,
-  // try to find an empty trailer and detached truck at same hub
+  // Auto-select: when driver is selected, find a detached truck and empty trailer at the driver's hub
   useEffect(() => {
     if (!driverId) return;
     const driver = drivers.find(d => d.id === driverId);
@@ -184,10 +183,22 @@ export function AssignOrderForm({ orderId, onClose }: { orderId: string; onClose
     const hubLocId = driver.home_location_id as string;
     if (!hubLocId) { setWarning('Driver has no home hub'); return; }
 
-    // Find empty trailer at same hub (not already selected)
+    const { actorEvents } = useStore.getState();
+
+    // Check if a truck is detached: find its last attach/detach event
+    const isTruckDetached = (truckId: string): boolean => {
+      const evs = actorEvents[`truck-${truckId}`];
+      if (!evs || evs.length === 0) return true; // no events = never attached = detached
+      const attachEvs = evs.filter(e => e.type === 'attach' || e.type === 'detach')
+        .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
+      if (attachEvs.length === 0) return true; // no attach/detach events = detached
+      return attachEvs[0].type === 'detach';
+    };
+
+    // Find empty trailer at same hub
     if (!trailerId) {
       const emptyTrailer = trailers.find(t =>
-        t.location_id === hubLocId && !t.is_hub
+        t.location_id === hubLocId
       );
       if (emptyTrailer) {
         setTrailerId(emptyTrailer.id as string);
@@ -196,15 +207,23 @@ export function AssignOrderForm({ orderId, onClose }: { orderId: string; onClose
       }
     }
 
-    // Find detached truck at same hub (not already selected)
+    // Find detached truck at same hub
     if (!truckId) {
-      const detTruck = trucks.find(t =>
-        t.location_id === hubLocId
+      // Prefer detached trucks at the same hub
+      const detachedTrucks = trucks.filter(t =>
+        t.location_id === hubLocId && isTruckDetached(t.id as string)
       );
-      if (detTruck) {
-        setTruckId(detTruck.id as string);
+      if (detachedTrucks.length > 0) {
+        setTruckId(detachedTrucks[0].id as string);
       } else {
-        setWarning(`No available truck found at driver's hub`);
+        // Fallback: any truck at the hub
+        const anyTruck = trucks.find(t => t.location_id === hubLocId);
+        if (anyTruck) {
+          setTruckId(anyTruck.id as string);
+          setWarning(`No detached truck found at hub — selected an attached truck`);
+        } else {
+          setWarning(`No available truck found at driver's hub`);
+        }
       }
     }
   }, [driverId]); // eslint-disable-line react-hooks/exhaustive-deps

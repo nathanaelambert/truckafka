@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { SplitPane } from '../components/SplitPane';
 import { MapView } from '../components/MapView';
 import { ControlPanel } from '../components/ControlPanel';
@@ -7,6 +8,16 @@ import { useStore } from '../store';
 
 function DetentionBanner() {
   const { detentionAlerts, dismissDetentionAlert } = useStore();
+
+  // Auto-dismiss alerts after 10 seconds
+  useEffect(() => {
+    if (detentionAlerts.length === 0) return;
+    const timer = setTimeout(() => {
+      dismissDetentionAlert(0);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [detentionAlerts, dismissDetentionAlert]);
+
   if (detentionAlerts.length === 0) return null;
 
   return (
@@ -15,6 +26,7 @@ function DetentionBanner() {
         <div key={i} style={{
           background: 'var(--bg-panel)', border: '1px solid var(--warning)', borderRadius: 8,
           padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', position: 'relative',
+          animation: 'fadeOut 10s ease-in forwards',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
             <span style={{ fontSize: 16 }}>⚠</span>
@@ -45,10 +57,10 @@ export function Monitor() {
   return (
     <div className="page">
       <DetentionBanner />
-      <SplitPane direction="vertical" initialSplit={85} min={100}>
-        <SplitPane direction="horizontal" initialSplit={60} min={200}>
+      <SplitPane direction="vertical" initialSplit={75} min={100}>
+        <SplitPane direction="horizontal" initialSplit={55} min={200}>
           <MapView />
-          <SplitPane direction="horizontal" initialSplit={45} min={150}>
+          <SplitPane direction="horizontal" initialSplit={50} min={150}>
             <OrdersPanel />
             <ControlPanel />
           </SplitPane>
