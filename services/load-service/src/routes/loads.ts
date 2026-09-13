@@ -96,11 +96,22 @@ export async function loadRoutes(app: FastifyInstance) {
 
   app.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const row = await queryOne('DELETE FROM load WHERE id = $1 RETURNING id', [id]);
-    if (!row) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Load not found' });
 
     // Delete all events associated with this load
     await query('DELETE FROM event WHERE load_id = $1', [id]);
+
+    // Delete orders referencing this load (their events were deleted above)
+    await query('DELETE FROM "order" WHERE load_id = $1', [id]).catch(() => {});
+
+    // Delete hauls referencing this load and their traversals
+    const hauls = await query<{ id: string }>('SELECT id FROM haul WHERE load_id = $1', [id]);
+    for (const h of hauls) {
+      await query('DELETE FROM road_segment_traversal WHERE haul_id = $1', [h.id]).catch(() => {});
+    }
+    await query('DELETE FROM haul WHERE load_id = $1', [id]).catch(() => {});
+
+    const row = await queryOne('DELETE FROM load WHERE id = $1 RETURNING id', [id]);
+    if (!row) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Load not found' });
 
     await publishEvent(KafkaTopics.LOAD_EVENTS, id, { type: 'load_deleted', payload: { id } });
     return { id };

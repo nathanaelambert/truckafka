@@ -109,7 +109,16 @@ export async function orderRoutes(app: FastifyInstance) {
       }
     } catch { /* ignore parse errors */ }
 
-    // Delete the order itself (this also cascades to haul if FK is set, but haul_id is SET NULL)
+    // Delete associated haul if linked
+    const orderHaul = await queryOne<{ haul_id: string | null; load_id: string }>(
+      'SELECT haul_id, load_id FROM "order" WHERE id = $1', [id]
+    );
+    if (orderHaul?.haul_id) {
+      await query('DELETE FROM road_segment_traversal WHERE haul_id = $1', [orderHaul.haul_id]).catch(() => {});
+      await query('DELETE FROM haul WHERE id = $1', [orderHaul.haul_id]).catch(() => {});
+    }
+
+    // Delete the order itself
     await queryOne('DELETE FROM "order" WHERE id = $1 RETURNING id', [id]);
 
     await publishEvent(KafkaTopics.ORDER_EVENTS, id, { type: 'order_deleted', payload: { id } });

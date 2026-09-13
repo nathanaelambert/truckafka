@@ -157,8 +157,23 @@ export async function haulRoutes(app: FastifyInstance) {
 
   app.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const row = await queryOne('DELETE FROM haul WHERE id = $1 RETURNING id', [id]);
-    if (!row) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Haul not found' });
+
+    // Get the load_id before deleting the haul
+    const haul = await queryOne<{ load_id: string }>('SELECT load_id FROM haul WHERE id = $1', [id]);
+    if (!haul) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Haul not found' });
+
+    // Delete the haul
+    await queryOne('DELETE FROM haul WHERE id = $1 RETURNING id', [id]);
+
+    // Delete events associated with this haul's load
+    await query('DELETE FROM event WHERE load_id = $1', [haul.load_id]).catch(() => {});
+
+    // Delete any orders that reference this haul
+    await query('DELETE FROM "order" WHERE haul_id = $1', [id]).catch(() => {});
+
+    // Delete road_segment_traversal for this haul
+    await query('DELETE FROM road_segment_traversal WHERE haul_id = $1', [id]).catch(() => {});
+
     await publishEvent(KafkaTopics.LOAD_EVENTS, id, { type: 'haul_deleted', payload: { id } });
     return { id };
   });
