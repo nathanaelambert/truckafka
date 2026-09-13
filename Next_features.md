@@ -19,7 +19,15 @@
 - [x] Near the "Focus" title add a toggle button to force focus mode. Focus mode overrides visibility elements: it makes all elements in the focus area visible and make all the other invisible (this is a mask that has poriority over the regular visibility options but it does not change visibilities. When focus mode is turned off, visibility comes back to what is was before)
 - [x] to the left of the play button add checkboxes to filter events by type.
 - [x] remove the status field from trucks and trailers in the cards. 
-- [ ] modify timeline zoom option: it should be surrounded by magnifying glass icons with - on the left and + on the rigt. The zoom should use the playhead as center (zoom in around the playhead)
-- [ ]  when the player is playing : clicking buttons from an event tooltip from the timeline doesn't work, it only works on the map. Selecting a different event from the map doesn't work when an other event's tooltip is openend. Make the map and timeline share a state of the "selected event" let both and map and timeline update their visuals based on that "selected event". Let the map and timeline both change the "selected event" by clicking on another event (in the timeline) or another event pin (in the map). Let them both set "selected event" to none by closing the tooltip from the currently selected event. Everything works fine when playback is paused, the issue is when playback is playing.
+- [x] modify timeline zoom option: it should be surrounded by magnifying glass icons with - on the left and + on the rigt. The zoom should use the playhead as center (zoom in around the playhead)
+- [x]  when the player is playing : clicking buttons from an event tooltip from the timeline doesn't work, it only works on the map. Selecting a different event from the map doesn't work when an other event's tooltip is openend. Make the map and timeline share a state of the "selected event" let both and map and timeline update their visuals based on that "selected event". Let the map and timeline both change the "selected event" by clicking on another event (in the timeline) or another event pin (in the map). Let them both set "selected event" to none by closing the tooltip from the currently selected event. Everything works fine when playback is paused, the issue is when playback is playing.
+- [x] currently the playhead has a time indicator that is render at the top of the screen (above the map), it should be rendered just underneath the timeline controls (vertical space should be allocated to that indicator)
+
+
+
+
+
+
+
 - [ ] merge the timeline control button and the timeline playhead tooltip: use the space where the timeline control buttons are. add the time ticking that is currently in the playhead's tooltip next to the play button.  
 

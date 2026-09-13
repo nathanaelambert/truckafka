@@ -59,5 +59,20 @@
 
 - [x] add a link order option. When two orders are linked, the same truck, driver, and trailer is reused from the first one to the second one, events are modified in a way so that once the driver has unloaded the first job, it emptymiles to the pickup of the second, load in window, then haul to the 2nd drop, unload there, and finally empty miles back to his home hub. (it is possible to link more orders, but linked orders have events that cannot overlap when manipulated in the timeline. Add a warning option, if the driver's shift extends beyond 14h after the start of his day and enters the off duty territory. 
 
-- [ ] for the slow A* itinerary problem. Do something where the quick heuristic is returned fast, but the complete A* routing is still computed in the background and when it is done computing modify the computed event haul or deadmile and add the correct option. 
- 
+- [x] when I click "Assign" an order. The popup still say "Dispatch Order" and "cancel" "dispatch" button, I want it to say "Assign Order" "cancel" "assign"
+
+- [x] For some reason when I assign an order, after the deadmile events are created, the events for the order are still visible on the timeline but not on the map. and it enters a weird state where only the selected order event is visible on the map. Road events are displayed perfectly. Make sure that order events follow the same rule: they are visible on the timeline of their order is visible toggled. They are visible on the map iff they are visible on the timeline and the playhead intersect with their existence in time.
+- [x] make detention alert disapear after 10s.
+- [x] by default give more height to the timeline, and more width to the order panel
+- [x] when app is launched recenter on playback automatically.
+
+- [x] remove the event type filter options checkboxes from the timeline Ui control
+
+- [x] when deleting a haul/order/or load from the admins panel. Make sure to not leave events with no parent. Delete the events too. 
+- [x] change the behaviour of the "link" order. Make it so that unasigned orders can be linked. Right now there are too many events created when I link two loads. When two loads are linked, there should be enough time between the end of one(unloading) and the start of the second(loading) to allow for a truck to deadhaul from the dropoff of the first to the pickup of the second. All events in between unloading of the first and loading of the second must be deleted. no additional load, unload, and haul event should be created. The only thing that should be done is compute this middle deadmile. If the time available for the trip is shorter that the time computed by the routing heursistic/a*, warn the user that the linking was unsuccesful. If there is enough time the two orders should be linked. A link is like a merge: turn them into one multi-order, with pickup1, dropoff1, pickup2, dropoff2, show them in one row in the timeline, and as 1 incoming order in the order panel.
+- [x] there should be 4 windows, for each load/unload event each with their own window. (I know that regular order only have 2 window: one for pickup, one for dropoff, but merged orders have more), handle that with grace.
+
+
+- [ ] There is a bug when I create an order and choose to create a new location, once I submit the new location, it selects something else from the list. 
+
+- [ ] for the slow A* itinerary problem. Do something where the quick heuristic is returned fast, but the complete A* routing is still trying to computed in the background (not blocking the ui, as a backend request), and when it is done computing modify the computed event haul or deadmile and add the correct option. 
