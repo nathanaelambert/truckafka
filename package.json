@@ -1,0 +1,28 @@
+{
+  "name": "truckmafia",
+  "version": "0.1.0",
+  "private": true,
+  "description": "City Dispatch Platform for the Southern Ontario logistics corridor",
+  "scripts": {
+    "dev:gateway": "pnpm --filter api-gateway dev",
+    "dev:fleet": "pnpm --filter fleet-service dev",
+    "dev:load": "pnpm --filter load-service dev",
+    "dev:tracking": "pnpm --filter tracking-service dev",
+    "dev:webapp": "pnpm --filter webapp dev",
+    "dev:mobile": "pnpm --filter mobile start",
+    "build": "pnpm -r build",
+    "db:migrate": "pnpm --filter @truckmafia/shared db:migrate",
+    "db:seed": "pnpm --filter @truckmafia/shared db:seed",
+    "db:reset": "pnpm --filter @truckmafia/shared db:reset",
+    "osm:import": "pnpm --filter @truckmafia/shared exec tsx src/import-osm.ts",
+    "osm:import:docker": "bash scripts/import-osm.sh",
+    "seed:trajectories": "pnpm --filter @truckmafia/shared exec tsx src/seed-trajectories.ts",
+    "seed:events": "pnpm --filter @truckmafia/shared exec tsx src/seed-events.ts",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "pnpm@9.7.1"
+}

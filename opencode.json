@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "spuric": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Spuric",
+      "options": {
+        "baseURL": "https://ai.spuric.com/v1",
+        "apiKey": "{env:SPURIC_API_KEY}"
+      },
+      "models": {
+        "spur-auto": {
+          "name": "GLM5.2"
+        }
+      }
+    }
+  }
+}
