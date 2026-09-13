@@ -161,7 +161,7 @@ function OrderCard({ order }: { order: Order }) {
           <button
             onClick={(e) => { e.stopPropagation(); setShowLink(true); }}
             style={{ background: 'transparent', border: '1px solid var(--text-dim)', color: 'var(--text-dim)', fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}
-          >Link</button>
+          >Merge</button>
         )}
         <button onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: 0, display: 'inline-flex', flexShrink: 0 }}>
           <ChevronIcon open={expanded} />
@@ -295,7 +295,7 @@ function SplitOrderForm({ orderId, onClose }: { orderId: string; onClose: () => 
   );
 }
 
-// ── Link Order popup ────────────────────────────────────────
+// ── Merge Order popup ────────────────────────────────────────
 
 function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () => void }) {
   const { orders, drivers, linkOrders } = useStore();
@@ -311,7 +311,7 @@ function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () =>
   const candidates = orders.filter(o => o.id !== order1Id && computeOrderStatus(o, new Date()) === 'incoming');
 
   const submit = async () => {
-    if (!order2Id) throw new Error('Please select an order to link');
+    if (!order2Id) throw new Error('Please select an order to merge');
     setError(null);
     setWarning(null);
 
@@ -339,7 +339,7 @@ function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () =>
   };
 
   return (
-    <Modal title="Link Orders" onClose={onClose} onSubmit={submit} submitLabel="Link" width={500}>
+    <Modal title="Merge Orders" onClose={onClose} onSubmit={submit} submitLabel="Merge" width={500}>
       {error && (
         <div style={{ marginBottom: 8, padding: '8px 12px', background: '#3a2a2a', border: '1px solid var(--danger)', borderRadius: 4, color: 'var(--danger)', fontSize: 12 }}>
           {error}
@@ -349,20 +349,20 @@ function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () =>
         <div style={{ marginBottom: 8, padding: '8px 12px', background: '#4a3a2a', border: '1px solid var(--warning)', borderRadius: 4, color: 'var(--warning)', fontSize: 12 }}>
           {warning}
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-            <button className="btn btn-sm btn-primary" onClick={async () => { setWarning(null); try { await linkOrders(order1Id, order2Id); onClose(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } }}>Link anyway</button>
+            <button className="btn btn-sm btn-primary" onClick={async () => { setWarning(null); try { await linkOrders(order1Id, order2Id); onClose(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } }}>Merge anyway</button>
           </div>
         </div>
       )}
       <div className="form-group" style={{ gridColumn: '1 / 3' }}>
-        <label>Select Order to Link *</label>
+        <label>Select Order to Merge *</label>
         <select value={order2Id} onChange={(e) => { setOrder2Id(e.target.value); setError(null); setWarning(null); }}>
           <option value="">Select an order...</option>
           {candidates.map((o) => <option key={o.id} value={o.id}>{o.load_number}</option>)}
         </select>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>
-        Links two orders into one multi-stop order (pickup1 → dropoff1 → deadmile → pickup2 → dropoff2).
-        A deadmile is computed between the two. If there is not enough time for the deadmile, linking will fail.
+        Merges two orders into one multi-stop order (pickup1 → dropoff1 → deadmile → pickup2 → dropoff2).
+        A deadmile is computed between the two. If there is not enough time for the deadmile, merging will fail.
       </div>
       {driver && (
         <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
