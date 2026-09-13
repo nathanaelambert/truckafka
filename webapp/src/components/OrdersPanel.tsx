@@ -85,6 +85,16 @@ function OrderEventRow({ ev, state }: { ev: OrderEvent; state: string }) {
             {(ev.distance_m / 1000).toFixed(1)} km · {durationLabel(ev)}
           </div>
         )}
+        {ev.type === 'loading' && ev.pickup_after && ev.pickup_before && (
+          <div style={{ fontSize: 10, color: 'rgba(100, 200, 100, 0.7)' }}>
+            Window: {fmtDate(ev.pickup_after)} – {fmtDate(ev.pickup_before)}
+          </div>
+        )}
+        {ev.type === 'unloading' && ev.dropoff_after && ev.dropoff_before && (
+          <div style={{ fontSize: 10, color: 'rgba(200, 100, 100, 0.7)' }}>
+            Window: {fmtDate(ev.dropoff_after)} – {fmtDate(ev.dropoff_before)}
+          </div>
+        )}
         {/* Actor refs */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
           {ev.truck_id ? <RefHeader el={{ type: 'truck', id: ev.truck_id }} /> : <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>No truck</span>}
@@ -147,7 +157,7 @@ function OrderCard({ order }: { order: Order }) {
             style={{ background: 'transparent', border: '1px solid var(--text-dim)', color: 'var(--text-dim)', fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}
           >Split</button>
         )}
-        {orderStatus === 'incoming' && hasHaul && (
+        {orderStatus === 'incoming' && (
           <button
             onClick={(e) => { e.stopPropagation(); setShowLink(true); }}
             style={{ background: 'transparent', border: '1px solid var(--text-dim)', color: 'var(--text-dim)', fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}
@@ -170,8 +180,27 @@ function OrderCard({ order }: { order: Order }) {
           <InfoRow label="Commodity" value={order.commodity || 'N/A'} />
           <InfoRow label="Hazmat" value={order.is_hazmat ? 'Yes' : 'No'} />
           <InfoRow label="Rate/km" value={`$${order.rate_km || 0}`} />
-          <InfoRow label="Pickup Window" value={`${fmtDate(order.pickup_after)} – ${fmtDate(order.pickup_before)}`} />
-          <InfoRow label="Dropoff Window" value={`${fmtDate(order.dropoff_after)} – ${fmtDate(order.dropoff_before)}`} />
+
+          {/* Windows — from events if available (supports merged orders), else order-level */}
+          {order.events.some(e => (e.type === 'loading' && e.pickup_after) || (e.type === 'unloading' && e.dropoff_after))
+            ? (() => {
+                let pickupN = 0, dropoffN = 0;
+                return order.events
+                  .filter(e => e.type === 'loading' || e.type === 'unloading')
+                  .map((ev) => {
+                    if (ev.type === 'loading') { pickupN++; return (
+                      <InfoRow key={ev.id} label={`Pickup ${pickupN} Window`} value={`${fmtDate(ev.pickup_after!)} – ${fmtDate(ev.pickup_before!)}`} />
+                    ); }
+                    else { dropoffN++; return (
+                      <InfoRow key={ev.id} label={`Dropoff ${dropoffN} Window`} value={`${fmtDate(ev.dropoff_after!)} – ${fmtDate(ev.dropoff_before!)}`} />
+                    ); }
+                  });
+              })()
+            : <>
+                <InfoRow label="Pickup Window" value={`${fmtDate(order.pickup_after)} – ${fmtDate(order.pickup_before)}`} />
+                <InfoRow label="Dropoff Window" value={`${fmtDate(order.dropoff_after)} – ${fmtDate(order.dropoff_before)}`} />
+              </>
+          }
 
           <div style={{ marginTop: 8, marginBottom: 4, fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Associated Events</div>
           {order.events.map(ev => (
@@ -272,24 +301,23 @@ function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () =>
   const { orders, drivers, linkOrders } = useStore();
   const [order2Id, setOrder2Id] = useState('');
   const [warning, setWarning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Get driver from order 1
   const order1 = orders.find(o => o.id === order1Id);
   const driverId = order1?.events.find(e => e.driver_id)?.driver_id;
   const driver = drivers.find(d => d.id === driverId);
   const dayStart = (driver?.day_start_hour as string) || '06:00';
 
-  // Filter candidates: incoming orders that are not the same order
   const candidates = orders.filter(o => o.id !== order1Id && computeOrderStatus(o, new Date()) === 'incoming');
 
   const submit = async () => {
     if (!order2Id) throw new Error('Please select an order to link');
+    setError(null);
+    setWarning(null);
 
-    // Check HOS: compute total shift time
     if (driver && order1) {
       const order2 = orders.find(o => o.id === order2Id);
       if (order2) {
-        // Get the end of the last event across both orders
         const allEnds = [...order1.events, ...(order2.events || [])].map(e => new Date(e.end_time).getTime());
         const lastEnd = Math.max(...allEnds);
         const [h, m] = dayStart.split(':').map(Number);
@@ -302,29 +330,39 @@ function LinkOrderForm({ order1Id, onClose }: { order1Id: string; onClose: () =>
       }
     }
 
-    await linkOrders(order1Id, order2Id);
-    onClose();
+    try {
+      await linkOrders(order1Id, order2Id);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   return (
     <Modal title="Link Orders" onClose={onClose} onSubmit={submit} submitLabel="Link" width={500}>
+      {error && (
+        <div style={{ marginBottom: 8, padding: '8px 12px', background: '#3a2a2a', border: '1px solid var(--danger)', borderRadius: 4, color: 'var(--danger)', fontSize: 12 }}>
+          {error}
+        </div>
+      )}
       {warning && (
         <div style={{ marginBottom: 8, padding: '8px 12px', background: '#4a3a2a', border: '1px solid var(--warning)', borderRadius: 4, color: 'var(--warning)', fontSize: 12 }}>
           {warning}
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-            <button className="btn btn-sm btn-primary" onClick={async () => { setWarning(null); await linkOrders(order1Id, order2Id); onClose(); }}>Link anyway</button>
+            <button className="btn btn-sm btn-primary" onClick={async () => { setWarning(null); try { await linkOrders(order1Id, order2Id); onClose(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } }}>Link anyway</button>
           </div>
         </div>
       )}
       <div className="form-group" style={{ gridColumn: '1 / 3' }}>
         <label>Select Order to Link *</label>
-        <select value={order2Id} onChange={(e) => { setOrder2Id(e.target.value); setWarning(null); }}>
+        <select value={order2Id} onChange={(e) => { setOrder2Id(e.target.value); setError(null); setWarning(null); }}>
           <option value="">Select an order...</option>
-          {candidates.map((o) => <option key={o.id} value={o.id}>{o.load_number} — {o.pickup_location_id} → {o.dropoff_location_id}</option>)}
+          {candidates.map((o) => <option key={o.id} value={o.id}>{o.load_number}</option>)}
         </select>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>
-        The same truck, driver, and trailer will be reused. After unloading the first order, the driver will deadmile to the second order's pickup, load, haul, and unload, then deadmile back to the home hub.
+        Links two orders into one multi-stop order (pickup1 → dropoff1 → deadmile → pickup2 → dropoff2).
+        A deadmile is computed between the two. If there is not enough time for the deadmile, linking will fail.
       </div>
       {driver && (
         <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>

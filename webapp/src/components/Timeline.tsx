@@ -359,12 +359,29 @@ export function Timeline() {
 
     if (!hidden) {
       // Background bands for pickup (dark green) and dropoff (dark red) windows
-      const pickupX = timeToX(new Date(order.pickup_after));
-      const pickupW = timeToX(new Date(order.pickup_before)) - pickupX;
-      if (pickupW > 0) orderBgBands.push({ x: pickupX, w: pickupW, color: 'rgba(34, 80, 34, 0.25)' });
-      const dropoffX = timeToX(new Date(order.dropoff_after));
-      const dropoffW = timeToX(new Date(order.dropoff_before)) - dropoffX;
-      if (dropoffW > 0) orderBgBands.push({ x: dropoffX, w: dropoffW, color: 'rgba(80, 34, 34, 0.25)' });
+      // Read from individual events (supports merged orders with multiple windows)
+      const hasEventWindows = order.events.some(e => (e.type === 'loading' && e.pickup_after) || (e.type === 'unloading' && e.dropoff_after));
+      if (hasEventWindows) {
+        for (const ev of order.events) {
+          if (ev.type === 'loading' && ev.pickup_after && ev.pickup_before) {
+            const px = timeToX(new Date(ev.pickup_after));
+            const pw = timeToX(new Date(ev.pickup_before)) - px;
+            if (pw > 0) orderBgBands.push({ x: px, w: pw, color: 'rgba(34, 80, 34, 0.25)' });
+          }
+          if (ev.type === 'unloading' && ev.dropoff_after && ev.dropoff_before) {
+            const dx = timeToX(new Date(ev.dropoff_after));
+            const dw = timeToX(new Date(ev.dropoff_before)) - dx;
+            if (dw > 0) orderBgBands.push({ x: dx, w: dw, color: 'rgba(80, 34, 34, 0.25)' });
+          }
+        }
+      } else {
+        const pickupX = timeToX(new Date(order.pickup_after));
+        const pickupW = timeToX(new Date(order.pickup_before)) - pickupX;
+        if (pickupW > 0) orderBgBands.push({ x: pickupX, w: pickupW, color: 'rgba(34, 80, 34, 0.25)' });
+        const dropoffX = timeToX(new Date(order.dropoff_after));
+        const dropoffW = timeToX(new Date(order.dropoff_before)) - dropoffX;
+        if (dropoffW > 0) orderBgBands.push({ x: dropoffX, w: dropoffW, color: 'rgba(80, 34, 34, 0.25)' });
+      }
     }
   }
 

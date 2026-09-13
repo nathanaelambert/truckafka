@@ -134,12 +134,12 @@ interface WSClient {
 
 const wsClients = new Set<WSClient>();
 
-app.get('/ws', { websocket: true }, (connection, _req) => {
-  const ws = connection.socket as unknown as WSClient;
+app.get('/ws', { websocket: true }, (socket, _req) => {
+  const ws = socket as unknown as WSClient;
   wsClients.add(ws);
   app.log.info(`WebSocket client connected (${wsClients.size} total)`);
 
-  connection.socket.on('message', (data: Buffer) => {
+  socket.on('message', (data: Buffer) => {
     try {
       const msg = JSON.parse(data.toString());
       // Client can subscribe to specific topics
@@ -151,12 +151,12 @@ app.get('/ws', { websocket: true }, (connection, _req) => {
     }
   });
 
-  connection.socket.on('close', () => {
+  socket.on('close', () => {
     wsClients.delete(ws);
     app.log.info(`WebSocket client disconnected (${wsClients.size} total)`);
   });
 
-  connection.socket.send(JSON.stringify({ type: 'connected', message: 'Connected to Truckmafia WebSocket hub' }));
+  socket.send(JSON.stringify({ type: 'connected', message: 'Connected to Truckmafia WebSocket hub' }));
 });
 
 function broadcast(message: unknown, topic?: string): void {

@@ -54,6 +54,10 @@ export interface OrderEvent {
   path?: { lat: number; lng: number }[];
   distance_m?: number;
   duration_s?: number;
+  pickup_after?: string;
+  pickup_before?: string;
+  dropoff_after?: string;
+  dropoff_before?: string;
 }
 
 export interface Order {
@@ -656,6 +660,8 @@ export const useStore = create<AppState>((set, get) => ({
         start_time: new Date(loadingStart).toISOString(),
         end_time: new Date(loadingEnd).toISOString(),
         start_location_id: data.pickup_location_id, end_location_id: data.pickup_location_id,
+        pickup_after: data.pickup_after.toISOString(),
+        pickup_before: data.pickup_before.toISOString(),
         ...noActors,
       },
       {
@@ -671,6 +677,8 @@ export const useStore = create<AppState>((set, get) => ({
         start_time: new Date(unloadStart).toISOString(),
         end_time: new Date(unloadEnd).toISOString(),
         start_location_id: data.dropoff_location_id, end_location_id: data.dropoff_location_id,
+        dropoff_after: data.dropoff_after.toISOString(),
+        dropoff_before: data.dropoff_before.toISOString(),
         ...noActors,
       },
     ];
@@ -729,24 +737,24 @@ export const useStore = create<AppState>((set, get) => ({
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
-    const loading = order.events.find(e => e.type === 'loading');
-    const haul = order.events.find(e => e.type === 'haul');
-    const unloading = order.events.find(e => e.type === 'unloading');
-    if (!loading || !haul || !unloading) return;
+    const sortedEvents = sortEventsByTime(order.events);
+    const firstLoading = sortedEvents.find(e => e.type === 'loading');
+    const lastUnloading = [...sortedEvents].reverse().find(e => e.type === 'unloading');
+    if (!firstLoading || !lastUnloading) return;
 
     // Resolve locations
     const truck = trucks.find(t => t.id === truckId);
     const trailer = trailers.find(t => t.id === trailerId);
     const driver = drivers.find(d => d.id === driverId);
     const homeLocId = (truck?.location_id as string) || (trailer?.location_id as string) || (driver?.home_location_id as string) || '';
-    const pickupLocId = order.pickup_location_id;
-    const dropoffLocId = order.dropoff_location_id;
+    const firstPickupLocId = firstLoading.start_location_id;
+    const lastDropoffLocId = lastUnloading.end_location_id;
     const loadId = order.load_id;
 
     const actors = { truck_id: truckId, driver_id: driverId, trailer_id: trailerId };
     const incomingStatus = { status: 'incoming' as EventState };
 
-    // Compute route from home hub to pickup (empty truck, not loaded)
+    // Compute route from home hub to first pickup (empty truck, not loaded)
     const TRUCK_EMPTY_W = 8000;
     const TRAILER_EMPTY_W = 4000;
     const emptyWeight = TRUCK_EMPTY_W + TRAILER_EMPTY_W;
@@ -754,12 +762,11 @@ export const useStore = create<AppState>((set, get) => ({
     let deadmilePath: { lat: number; lng: number }[] | undefined;
     let deadmileDistanceM = 0;
     const homeLoc = locations.find(l => l.id === homeLocId);
-    const pickupLoc = locations.find(l => l.id === pickupLocId);
+    const pickupLoc = locations.find(l => l.id === firstPickupLocId);
     const homePos = homeLoc?.position as { lat: number; lng: number } | undefined;
     const pickupPos = pickupLoc?.position as { lat: number; lng: number } | undefined;
-    const loadingStartMs = new Date(loading.start_time).getTime();
-    // deadmile to pickup starts before loading; we estimate start time for routing
-    const deadmileToStartTime = loadingStartMs - 60 * 60 * 1000; // rough estimate
+    const loadingStartMs = new Date(firstLoading.start_time).getTime();
+    const deadmileToStartTime = loadingStartMs - 60 * 60 * 1000;
     if (homePos && pickupPos) {
       try {
         const route = await api.getRoute(
@@ -770,20 +777,19 @@ export const useStore = create<AppState>((set, get) => ({
         deadmilePath = route.geometry;
         deadmileDistanceM = route.total_distance_m;
       } catch {
-        // Fast fallback
         const d = Math.sqrt((homePos.lat - pickupPos.lat) ** 2 + (homePos.lng - pickupPos.lng) ** 2);
         deadmileDistanceM = Math.round(d * 111000 * 1.3);
         deadmileDurationMs = Math.max(deadmileDistanceM / (60 * 1000 / 3600), 10 * 60 * 1000);
       }
     }
 
-    // Compute route from dropoff back to home hub (empty truck after unloading)
+    // Compute route from last dropoff back to home hub (empty truck after unloading)
     let returnDurationMs = 30 * 60 * 1000;
     let returnPath: { lat: number; lng: number }[] | undefined;
     let returnDistanceM = 0;
-    const dropoffLoc = locations.find(l => l.id === dropoffLocId);
+    const dropoffLoc = locations.find(l => l.id === lastDropoffLocId);
     const dropoffPos = dropoffLoc?.position as { lat: number; lng: number } | undefined;
-    const unloadingEndMs = new Date(unloading.end_time).getTime();
+    const unloadingEndMs = new Date(lastUnloading.end_time).getTime();
     const returnStartTime = unloadingEndMs + 15 * 60 * 1000;
     if (dropoffPos && homePos) {
       try {
@@ -801,26 +807,21 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    const ATTACH_DUR = 30 * 60 * 1000; // 30min
+    const ATTACH_DUR = 30 * 60 * 1000;
     const DETACH_DUR = 30 * 60 * 1000;
 
-    const loadingStart = new Date(loading.start_time).getTime();
-    const unloadingEnd = new Date(unloading.end_time).getTime();
+    const loadingStart = new Date(firstLoading.start_time).getTime();
+    const unloadingEnd = new Date(lastUnloading.end_time).getTime();
 
     // attach at home hub, deadmile starts immediately after attach
     const deadmileToStart = loadingStart - deadmileDurationMs;
     const attachStart = deadmileToStart - ATTACH_DUR;
     const attachEnd = attachStart + ATTACH_DUR;
-
-    // deadmile home → pickup (ends exactly when loading starts)
-    const deadmileToStart_t = attachEnd;
     const deadmileToEnd = loadingStart;
 
     // deadmile dropoff → home (starts immediately when unloading ends)
     const deadmileBackStart = unloadingEnd;
     const deadmileBackEnd = deadmileBackStart + returnDurationMs;
-
-    // detach at home hub
     const detachStart = deadmileBackEnd;
     const detachEnd = detachStart + DETACH_DUR;
 
@@ -830,66 +831,55 @@ export const useStore = create<AppState>((set, get) => ({
       driver_id: driverId,
       truck_id: truckId,
       trailer_id: trailerId,
-      started_at: loading.start_time,
-      ended_at: unloading.end_time,
+      started_at: firstLoading.start_time,
+      ended_at: lastUnloading.end_time,
       is_draft: false,
       is_active: true,
     }) as { id: string };
 
-    // Build the new event chain
-    const newEvents: OrderEvent[] = [
-      { id: uid(), type: 'loading', load_id: loadId, ...actors, ...incomingStatus,
-        start_time: loading.start_time, end_time: loading.end_time,
-        start_location_id: pickupLocId, end_location_id: pickupLocId },
-      { id: uid(), type: 'haul', load_id: loadId, ...actors, ...incomingStatus,
-        start_time: haul.start_time, end_time: haul.end_time,
-        start_location_id: pickupLocId, end_location_id: dropoffLocId,
-        path: haul.path, distance_m: haul.distance_m, duration_s: haul.duration_s },
-      { id: uid(), type: 'unloading', load_id: loadId, ...actors, ...incomingStatus,
-        start_time: unloading.start_time, end_time: unloading.end_time,
-        start_location_id: dropoffLocId, end_location_id: dropoffLocId },
-    ];
+    // Stamp actors onto all existing events, keeping their windows and paths intact
+    const stampedEvents: OrderEvent[] = sortedEvents.map(ev => ({ ...ev, ...actors }));
 
-    // Add attach + deadmile to pickup (before loading)
+    // Add attach + deadmile to first pickup (before loading)
     const preEvents: OrderEvent[] = [
       { id: uid(), type: 'attach', load_id: loadId, ...actors, ...incomingStatus,
         start_time: new Date(attachStart).toISOString(), end_time: new Date(attachEnd).toISOString(),
         start_location_id: homeLocId, end_location_id: homeLocId },
       { id: uid(), type: 'deadmile', load_id: loadId, ...actors, ...incomingStatus,
-        start_time: new Date(deadmileToStart_t).toISOString(), end_time: new Date(deadmileToEnd).toISOString(),
-        start_location_id: homeLocId, end_location_id: pickupLocId,
+        start_time: new Date(attachEnd).toISOString(), end_time: new Date(deadmileToEnd).toISOString(),
+        start_location_id: homeLocId, end_location_id: firstPickupLocId,
         path: deadmilePath, distance_m: deadmileDistanceM, duration_s: deadmileDurationMs / 1000 },
     ];
 
-    // Add deadmile back + detach (after unloading)
+    // Add deadmile back + detach (after last unloading)
     const postEvents: OrderEvent[] = [
       { id: uid(), type: 'deadmile', load_id: loadId, ...actors, ...incomingStatus,
         start_time: new Date(deadmileBackStart).toISOString(), end_time: new Date(deadmileBackEnd).toISOString(),
-        start_location_id: dropoffLocId, end_location_id: homeLocId,
+        start_location_id: lastDropoffLocId, end_location_id: homeLocId,
         path: returnPath, distance_m: returnDistanceM, duration_s: returnDurationMs / 1000 },
       { id: uid(), type: 'detach', load_id: loadId, ...actors, ...incomingStatus,
         start_time: new Date(detachStart).toISOString(), end_time: new Date(detachEnd).toISOString(),
         start_location_id: homeLocId, end_location_id: homeLocId },
     ];
 
-    const allEvents = [...preEvents, ...newEvents, ...postEvents];
+    const allEvents = [...preEvents, ...stampedEvents, ...postEvents];
 
-    // Create events in DB
-    for (const ev of allEvents) {
+    // Create new events in DB (attach, deadmiles, detach — the middle events already exist)
+    for (const ev of [...preEvents, ...postEvents]) {
       try {
         const created = await api.createEvent({
-          type: ev.type,
-          start_time: ev.start_time,
-          end_time: ev.end_time,
-          load_id: ev.load_id,
-          truck_id: ev.truck_id,
-          driver_id: ev.driver_id,
-          trailer_id: ev.trailer_id,
-          start_location_id: ev.start_location_id,
-          end_location_id: ev.end_location_id,
-          status: ev.status,
+          type: ev.type, start_time: ev.start_time, end_time: ev.end_time,
+          load_id: ev.load_id, truck_id: ev.truck_id, driver_id: ev.driver_id, trailer_id: ev.trailer_id,
+          start_location_id: ev.start_location_id, end_location_id: ev.end_location_id, status: ev.status,
         }) as { id: string };
         ev.id = created.id;
+      } catch { /* ignore */ }
+    }
+
+    // Update existing events with actors
+    for (const ev of stampedEvents) {
+      try {
+        await api.updateEvent(ev.id, { truck_id: truckId, driver_id: driverId, trailer_id: trailerId });
       } catch { /* ignore */ }
     }
 
@@ -1099,183 +1089,100 @@ export const useStore = create<AppState>((set, get) => ({
     const order1 = orders.find(o => o.id === order1Id);
     const order2 = orders.find(o => o.id === order2Id);
     if (!order1 || !order2) return;
-    if (!order1.haul_id || !order1.events.some(e => e.truck_id)) {
-      throw new Error('First order must be assigned before linking');
-    }
 
-    // Get actors from order 1
-    const truckId = order1.events.find(e => e.truck_id)?.truck_id!;
-    const driverId = order1.events.find(e => e.driver_id)?.driver_id!;
-    const trailerId = order1.events.find(e => e.trailer_id)?.trailer_id!;
-
-    // Find the unloading end of order 1
     const unload1 = order1.events.find(e => e.type === 'unloading');
     if (!unload1) throw new Error('Order 1 has no unloading event');
     const unload1End = new Date(unload1.end_time).getTime();
 
-    // Find order 2's pickup location
-    const pickup2Loc = locations.find(l => l.id === order2.pickup_location_id);
-    const dropoff2Loc = locations.find(l => l.id === order2.dropoff_location_id);
-    const unload1Loc = locations.find(l => l.id === unload1.end_location_id);
-    const pickup2Pos = pickup2Loc?.position as { lat: number; lng: number } | undefined;
-    const unload1Pos = unload1Loc?.position as { lat: number; lng: number } | undefined;
+    const load2 = order2.events.find(e => e.type === 'loading');
+    if (!load2) throw new Error('Order 2 has no loading event');
+    const load2Start = new Date(load2.start_time).getTime();
 
-    // Compute deadmile from order 1 dropoff → order 2 pickup
+    const availableTimeMs = load2Start - unload1End;
+    if (availableTimeMs <= 0) {
+      throw new Error('Order 2 loading starts before Order 1 unloading ends. Cannot link.');
+    }
+
+    const unload1Loc = locations.find(l => l.id === unload1.end_location_id);
+    const pickup2Loc = locations.find(l => l.id === load2.start_location_id);
+    const unload1Pos = unload1Loc?.position as { lat: number; lng: number } | undefined;
+    const pickup2Pos = pickup2Loc?.position as { lat: number; lng: number } | undefined;
+
     let deadmileDurationMs = 30 * 60 * 1000;
     let deadmilePath: { lat: number; lng: number }[] | undefined;
     let deadmileDistanceM = 0;
     if (unload1Pos && pickup2Pos) {
       try {
-        const route = await api.getRoute(unload1Pos.lat, unload1Pos.lng, pickup2Pos.lat, pickup2Pos.lng, 12000, new Date(unload1End + 15 * 60 * 1000).toISOString(), false);
+        const route = await api.getRoute(
+          unload1Pos.lat, unload1Pos.lng, pickup2Pos.lat, pickup2Pos.lng,
+          12000, new Date(unload1End).toISOString(), false
+        );
         deadmileDurationMs = Math.max(route.total_time_s * 1000, 10 * 60 * 1000);
         deadmilePath = route.geometry;
         deadmileDistanceM = route.total_distance_m;
-      } catch { /* fallback */ }
+      } catch { /* fallback to 30min */ }
     }
 
-    // Shift order 2 events to start after order 1 unloading + deadmile
-    const deadmileStart = unload1End + 15 * 60 * 1000;
-    const deadmileEnd = deadmileStart + deadmileDurationMs;
+    if (deadmileDurationMs > availableTimeMs) {
+      const deadMins = Math.round(deadmileDurationMs / 60000);
+      const availMins = Math.round(availableTimeMs / 60000);
+      throw new Error(
+        `Linking unsuccessful: deadmile requires ${deadMins} min but only ${availMins} min available ` +
+        `between order 1 unloading and order 2 loading.`
+      );
+    }
 
-    // Get order 2's loading event to compute the shift
-    const load2 = order2.events.find(e => e.type === 'loading');
-    if (!load2) throw new Error('Order 2 has no loading event');
-    const load2Start = new Date(load2.start_time).getTime();
-    const newLoad2Start = Math.max(deadmileEnd, load2Start);
-    const shiftMs = newLoad2Start - load2Start;
+    const unload1Idx = order1.events.indexOf(unload1);
+    const order1KeepEvents = order1.events.slice(0, unload1Idx + 1);
+    const order1DeleteEvents = order1.events.slice(unload1Idx + 1);
 
-    // Shift all order 2 events
-    const updatedOrder2Events = order2.events.map(ev => {
-      const newStart = new Date(ev.start_time).getTime() + shiftMs;
-      const newEnd = new Date(ev.end_time).getTime() + shiftMs;
-      return {
-        ...ev,
-        start_time: new Date(newStart).toISOString(),
-        end_time: new Date(newEnd).toISOString(),
-        truck_id: truckId, driver_id: driverId, trailer_id: trailerId,
-      };
-    });
+    // Always stamp windows from the correct source order onto each loading/unloading event
+    const stampWindows = (events: OrderEvent[], order: Order): OrderEvent[] =>
+      events.map(ev => {
+        if (ev.type === 'loading') return { ...ev, pickup_after: order.pickup_after, pickup_before: order.pickup_before };
+        if (ev.type === 'unloading') return { ...ev, dropoff_after: order.dropoff_after, dropoff_before: order.dropoff_before };
+        return ev;
+      });
 
-    // Add deadmile event between order 1 and order 2
     const deadmileEvent: OrderEvent = {
       id: uid(), type: 'deadmile', load_id: order2.load_id,
-      truck_id: truckId, driver_id: driverId, trailer_id: trailerId,
+      truck_id: unload1.truck_id, driver_id: unload1.driver_id, trailer_id: unload1.trailer_id,
       status: 'incoming' as EventState,
-      start_time: new Date(deadmileStart).toISOString(),
-      end_time: new Date(deadmileEnd).toISOString(),
+      start_time: new Date(unload1End).toISOString(),
+      end_time: new Date(unload1End + deadmileDurationMs).toISOString(),
       start_location_id: unload1.end_location_id,
-      end_location_id: order2.pickup_location_id,
+      end_location_id: load2.start_location_id,
       path: deadmilePath, distance_m: deadmileDistanceM, duration_s: deadmileDurationMs / 1000,
     };
 
-    // Update order 2: add deadmile + shifted events with actors
-    const allOrder2Events = [deadmileEvent, ...updatedOrder2Events];
+    const load2Idx = order2.events.indexOf(load2);
+    const order2KeepEvents = order2.events.slice(load2Idx);
+    const order2DeleteEvents = order2.events.slice(0, load2Idx);
 
-    // Also update order 1's post-events (deadmile back to hub, detach) to move after order 2
-    const detach1 = order1.events.find(e => e.type === 'detach');
-    const deadmileBack1 = order1.events.filter(e => e.type === 'deadmile' && e.start_location_id === order1.dropoff_location_id);
+    const mergedEvents = [...stampWindows(order1KeepEvents, order1), deadmileEvent, ...stampWindows(order2KeepEvents, order2)];
 
-    // Find end of order 2
-    const unload2 = updatedOrder2Events.find(e => e.type === 'unloading');
-    const order2End = unload2 ? new Date(unload2.end_time).getTime() : deadmileEnd;
-
-    // Find home hub from truck
-    const truck = get().trucks.find(t => t.id === truckId);
-    const homeLocId = (truck?.location_id as string) || '';
-
-    // Compute deadmile back from order 2 dropoff → home hub
-    let backDurationMs = 30 * 60 * 1000;
-    let backPath: { lat: number; lng: number }[] | undefined;
-    let backDistanceM = 0;
-    const dropoff2Pos = dropoff2Loc?.position as { lat: number; lng: number } | undefined;
-    const homeLoc = locations.find(l => l.id === homeLocId);
-    const homePos = homeLoc?.position as { lat: number; lng: number } | undefined;
-    if (dropoff2Pos && homePos) {
-      try {
-        const route = await api.getRoute(dropoff2Pos.lat, dropoff2Pos.lng, homePos.lat, homePos.lng, 12000, new Date(order2End + 15 * 60 * 1000).toISOString(), false);
-        backDurationMs = Math.max(route.total_time_s * 1000, 10 * 60 * 1000);
-        backPath = route.geometry;
-        backDistanceM = route.total_distance_m;
-      } catch { /* fallback */ }
+    for (const ev of [...order1DeleteEvents, ...order2DeleteEvents]) {
+      try { await api.deleteEvent(ev.id); } catch { /* ignore */ }
     }
 
-    const backStart = order2End + 15 * 60 * 1000;
-    const backEnd = backStart + backDurationMs;
-    const detachStart = backEnd;
-    const detachEnd = detachStart + 10 * 60 * 1000;
-
-    // Remove old deadmile-back and detach from order 1, add new ones after order 2
-    const updatedOrder1Events = order1.events.filter(e =>
-      !(e.type === 'deadmile' && e.start_location_id === order1.dropoff_location_id) &&
-      e.type !== 'detach'
-    );
-
-    const newPostEvents: OrderEvent[] = [
-      { id: uid(), type: 'deadmile', load_id: order2.load_id,
-        truck_id: truckId, driver_id: driverId, trailer_id: trailerId,
-        status: 'incoming' as EventState,
-        start_time: new Date(backStart).toISOString(), end_time: new Date(backEnd).toISOString(),
-        start_location_id: order2.dropoff_location_id, end_location_id: homeLocId,
-        path: backPath, distance_m: backDistanceM, duration_s: backDurationMs / 1000 },
-      { id: uid(), type: 'detach', load_id: order2.load_id,
-        truck_id: truckId, driver_id: driverId, trailer_id: trailerId,
-        status: 'incoming' as EventState,
-        start_time: new Date(detachStart).toISOString(), end_time: new Date(detachEnd).toISOString(),
-        start_location_id: homeLocId, end_location_id: homeLocId },
-    ];
-
-    // Create new events in DB
-    for (const ev of [...allOrder2Events, ...newPostEvents]) {
-      try {
-        const created = await api.createEvent({
-          type: ev.type, start_time: ev.start_time, end_time: ev.end_time,
-          load_id: ev.load_id, truck_id: ev.truck_id, driver_id: ev.driver_id, trailer_id: ev.trailer_id,
-          start_location_id: ev.start_location_id, end_location_id: ev.end_location_id, status: ev.status,
-        }) as { id: string };
-        ev.id = created.id;
-      } catch { /* ignore */ }
-    }
-
-    // Delete old deadmile-back and detach events from order 1
-    for (const ev of order1.events) {
-      if ((ev.type === 'deadmile' && ev.start_location_id === order1.dropoff_location_id) || ev.type === 'detach') {
-        try { await api.deleteEvent(ev.id); } catch { /* ignore */ }
-      }
-    }
-
-    // Update order 1: remove old post-events, add new post-events after order 2
-    const finalOrder1Events = [...updatedOrder1Events, ...newPostEvents];
-
-    // Update order 2: add deadmile + shifted events with actors
-    // Also create haul for order 2 if not already assigned
     try {
-      await api.createHaul({
-        load_id: order2.load_id, driver_id: driverId, truck_id: truckId, trailer_id: trailerId,
-        started_at: updatedOrder2Events.find(e => e.type === 'loading')?.start_time || new Date().toISOString(),
-        ended_at: updatedOrder2Events.find(e => e.type === 'unloading')?.end_time || new Date().toISOString(),
-        is_draft: false, is_active: true,
-      });
+      await api.updateOrder(order2Id, { events_data: [] });
+      await api.deleteOrder(order2Id);
     } catch { /* ignore */ }
 
-    // Update orders in DB
     try {
-      await api.updateOrder(order1Id, { events_data: finalOrder1Events });
-      await api.updateOrder(order2Id, { haul_id: 'linked', status: 'incoming', events_data: allOrder2Events });
+      await api.updateOrder(order1Id, { events_data: mergedEvents });
     } catch { /* ignore */ }
 
-    // Update state
     set(state => ({
-      orders: state.orders.map(o => {
-        if (o.id === order1Id) return { ...o, events: finalOrder1Events };
-        if (o.id === order2Id) return { ...o, haul_id: 'linked', events: allOrder2Events, status: 'incoming' as OrderStatus };
-        return o;
-      }),
+      orders: state.orders
+        .filter(o => o.id !== order2Id)
+        .map(o => o.id === order1Id ? { ...o, events: mergedEvents } : o),
       linkedOrders: {
         ...state.linkedOrders,
         [order1Id]: [...(state.linkedOrders[order1Id] || []), order2Id],
       },
     }));
-    await get().refreshHauls();
     await get().refreshActorEvents();
   },
 
@@ -1290,10 +1197,10 @@ export const useStore = create<AppState>((set, get) => ({
         if (targetIdx === -1) return order;
         const targetEv = sorted[targetIdx];
 
-        const pickupAfterMs = new Date(order.pickup_after).getTime();
-        const pickupBeforeMs = new Date(order.pickup_before).getTime();
-        const dropoffAfterMs = new Date(order.dropoff_after).getTime();
-        const dropoffBeforeMs = new Date(order.dropoff_before).getTime();
+        const pickupAfterMs = new Date(targetEv.pickup_after ?? order.pickup_after).getTime();
+        const pickupBeforeMs = new Date(targetEv.pickup_before ?? order.pickup_before).getTime();
+        const dropoffAfterMs = new Date(targetEv.dropoff_after ?? order.dropoff_after).getTime();
+        const dropoffBeforeMs = new Date(targetEv.dropoff_before ?? order.dropoff_before).getTime();
 
         const dur = new Date(targetEv.end_time).getTime() - new Date(targetEv.start_time).getTime();
 
