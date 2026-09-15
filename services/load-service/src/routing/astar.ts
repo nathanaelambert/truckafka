@@ -24,6 +24,35 @@ let graphCache: Graph | null = null;
 let graphCacheTime = 0;
 const GRAPH_CACHE_TTL_MS = 60_000;
 
+// ── Profiling ──────────────────────────────────────────────────
+
+export interface RouteProfile {
+  ensureRoadDataMs: number;
+  buildGraphMs: number;
+  findNearestNodeMs: number;
+  loadRoadEventsMs: number;
+  bfsConnectivityMs: number;
+  astarLoopMs: number;
+  reconstructPathMs: number;
+  nodeExpansions: number;
+  edgeLookups: number;
+  edgesEvaluated: number;
+  edgesRelaxed: number;
+  heuristicCalls: number;
+  heuristicMs: number;
+  graphNodes: number;
+  graphEdges: number;
+  cacheHit: boolean;
+  dbQueries: number;
+  totalMs: number;
+}
+
+let lastProfile: RouteProfile | null = null;
+
+export function getLastRouteProfile(): RouteProfile | null {
+  return lastProfile;
+}
+
 // ── Haversine distance (meters) ──────────────────────────────────
 
 function haversine(a: GeoPoint, b: GeoPoint): number {
@@ -210,38 +239,82 @@ export async function findRoute(
   endLat: number, endLng: number,
   totalWeightKg: number,
   atTime: Date = new Date(),
-  isLoaded: boolean = false
+  isLoaded: boolean = false,
+  onProfile?: (p: RouteProfile) => void
 ): Promise<RouteResult | null> {
+  const tStart = Date.now();
+  const p: RouteProfile = {
+    ensureRoadDataMs: 0, buildGraphMs: 0, findNearestNodeMs: 0, loadRoadEventsMs: 0,
+    bfsConnectivityMs: 0, astarLoopMs: 0, reconstructPathMs: 0,
+    nodeExpansions: 0, edgeLookups: 0, edgesEvaluated: 0, edgesRelaxed: 0,
+    heuristicCalls: 0, heuristicMs: 0,
+    graphNodes: 0, graphEdges: 0, cacheHit: false, dbQueries: 0, totalMs: 0,
+  };
+
+  const done = (): RouteProfile => {
+    p.totalMs = Date.now() - tStart;
+    lastProfile = p;
+    onProfile?.(p);
+    return p;
+  };
+
   // Smart loading strategy:
   // 1. Load ALL road types in small radius around start and end (local roads connect to highways)
   // 2. Load MAJOR highways in the corridor between them (backbone, fewer Overpass calls)
-  await ensureRoadDataNear(startLat, startLng);
-  await ensureRoadDataNear(endLat, endLng);
-  await loadHighwayCorridor(startLat, startLng, endLat, endLng);
-  invalidateGraphCache();
+  // Cache is only invalidated when new road data is actually loaded from Overpass.
+  // When the cache is valid, skip road-data loading entirely — the graph is current.
+  const cacheValid = graphCache !== null && (Date.now() - graphCacheTime < GRAPH_CACHE_TTL_MS);
+  let t0 = Date.now();
+  if (!cacheValid) {
+    p.dbQueries += 1;
+    await ensureRoadDataNear(startLat, startLng);
+    p.dbQueries += 1;
+    await ensureRoadDataNear(endLat, endLng);
+    p.dbQueries += 1;
+    const corridorLoaded = await loadHighwayCorridor(startLat, startLng, endLat, endLng);
+    if (corridorLoaded > 0) invalidateGraphCache();
+  }
+  p.ensureRoadDataMs = Date.now() - t0;
 
+  t0 = Date.now();
+  if (!cacheValid) p.dbQueries += 2;
   const graph = await buildGraph();
+  p.buildGraphMs = Date.now() - t0;
+  p.cacheHit = cacheValid;
+  p.graphNodes = graph.nodes.size;
+  p.graphEdges = graph.adjacency.size;
   console.log(`[A*] Graph: ${graph.nodes.size} nodes, ${graph.adjacency.size} adjacency entries`);
 
+  t0 = Date.now();
+  p.dbQueries += 1;
   const startNode = await findNearestNode(startLat, startLng);
+  p.dbQueries += 1;
   const endNode = await findNearestNode(endLat, endLng);
+  p.findNearestNodeMs = Date.now() - t0;
   console.log(`[A*] startNode: ${startNode}, endNode: ${endNode}`);
 
-  if (!startNode || !endNode) return null;
-  if (startNode === endNode) return { segmentIds: [], geometry: [], totalDistance_m: 0, totalTime_s: 0, segments: [] };
+  if (!startNode || !endNode) { done(); return null; }
+  if (startNode === endNode) {
+    done();
+    return { segmentIds: [], geometry: [], totalDistance_m: 0, totalTime_s: 0, segments: [] };
+  }
 
   const endPos = graph.nodes.get(endNode);
   const startPos = graph.nodes.get(startNode);
   console.log(`[A*] startPos in graph: ${!!startPos}, endPos in graph: ${!!endPos}`);
-  if (!startPos || !endPos) return null;
+  if (!startPos || !endPos) { done(); return null; }
 
   // A* with time-advancing: gScore is accumulated time (seconds) from start
   // We also track the arrival time at each node to check road events per-edge
   // Preload all road events at the start time (approximation: we use start time for all edges)
+  t0 = Date.now();
+  p.dbQueries += 1;
   const roadEventsMap = await loadAllRoadEvents(atTime);
+  p.loadRoadEventsMs = Date.now() - t0;
   console.log(`[A*] Road events: ${roadEventsMap.size} segments with events`);
 
   // Quick BFS connectivity check before running expensive A*
+  t0 = Date.now();
   const reachable = new Set<string>([startNode]);
   const queue = [startNode];
   while (queue.length > 0 && reachable.size < graph.nodes.size) {
@@ -256,8 +329,10 @@ export async function findRoute(
     }
     if (reachable.has(endNode)) break;
   }
+  p.bfsConnectivityMs = Date.now() - t0;
   if (!reachable.has(endNode)) {
     console.log(`[A*] End node not reachable from start (reachable: ${reachable.size}/${graph.nodes.size})`);
+    done();
     return null;
   }
   console.log(`[A*] End node is reachable (reachable set: ${reachable.size})`);
@@ -272,6 +347,9 @@ export async function findRoute(
   arrivalTime.set(startNode, atTime.getTime());
   fScore.set(startNode, haversine(startPos, endPos) / 30);
 
+  t0 = Date.now();
+  let result: RouteResult | null = null;
+
   while (openSet.size > 0) {
     let current: string | null = null;
     let lowestF = Infinity;
@@ -281,15 +359,24 @@ export async function findRoute(
     }
     if (!current) break;
 
+    p.nodeExpansions++;
+
     if (current === endNode) {
-      return reconstructPath(cameFrom, current, startNode, graph, totalWeightKg, isLoaded, atTime);
+      p.astarLoopMs = Date.now() - t0;
+      t0 = Date.now();
+      result = reconstructPath(cameFrom, current, startNode, graph, totalWeightKg, isLoaded, atTime);
+      p.reconstructPathMs = Date.now() - t0;
+      break;
     }
 
     openSet.delete(current);
+    p.edgeLookups++;
     const neighbors = graph.adjacency.get(current) ?? [];
     const currentArrival = arrivalTime.get(current) ?? atTime.getTime();
 
     for (const edge of neighbors) {
+      p.edgesEvaluated++;
+
       // Check road events from preloaded map
       const eventInfo = roadEventsMap.get(edge.segmentId) ?? null;
 
@@ -316,19 +403,28 @@ export async function findRoute(
 
       const neighborG = gScore.get(edge.toNode) ?? Infinity;
       if (tentativeG < neighborG) {
+        p.edgesRelaxed++;
         cameFrom.set(edge.toNode, { node: current, edge, edgeTime });
         gScore.set(edge.toNode, tentativeG);
         arrivalTime.set(edge.toNode, currentArrival + edgeTime * 1000);
 
         const neighborPos = graph.nodes.get(edge.toNode);
+        const hT0 = Date.now();
         const heuristic = neighborPos ? haversine(neighborPos, endPos) / 30 : 0;
+        p.heuristicMs += Date.now() - hT0;
+        p.heuristicCalls++;
         fScore.set(edge.toNode, tentativeG + heuristic);
         openSet.add(edge.toNode);
       }
     }
   }
 
-  return null;
+  if (!result) {
+    p.astarLoopMs = Date.now() - t0;
+  }
+
+  done();
+  return result;
 }
 
 function reconstructPath(
@@ -428,4 +524,16 @@ export async function computeItinerary(haulId: string): Promise<RouteResult | nu
 
 export function invalidateGraphCache(): void {
   graphCache = null;
+}
+
+export function getCacheStatus(): { valid: boolean; ageMs: number; ttlMs: number; nodes: number; edges: number } {
+  const now = Date.now();
+  const valid = graphCache !== null && (now - graphCacheTime < GRAPH_CACHE_TTL_MS);
+  return {
+    valid,
+    ageMs: graphCache ? now - graphCacheTime : 0,
+    ttlMs: GRAPH_CACHE_TTL_MS,
+    nodes: graphCache?.nodes.size ?? 0,
+    edges: graphCache?.adjacency.size ?? 0,
+  };
 }

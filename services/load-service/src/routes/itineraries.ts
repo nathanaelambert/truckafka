@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { query, queryOne, parseGeoLineString, parseGeoPoint } from '@truckmafia/shared';
-import { computeItinerary, findRoute, estimatedTime } from '../routing/astar.js';
+import { computeItinerary, findRoute, estimatedTime, invalidateGraphCache, getCacheStatus, type RouteProfile } from '../routing/astar.js';
 import { fastRoute } from '../routing/fast-route.js';
 import type { GeoPoint } from '@truckmafia/shared';
 
@@ -189,9 +189,9 @@ export async function itineraryRoutes(app: FastifyInstance) {
 
   // ── Compute a route between two coordinates (for trajectory generation) ──
   app.get('/route', async (request, reply) => {
-    const { startLat, startLng, endLat, endLng, weight, startAt, isLoaded } = request.query as {
+    const { startLat, startLng, endLat, endLng, weight, startAt, isLoaded, profile: profileFlag } = request.query as {
       startLat: string; startLng: string; endLat: string; endLng: string;
-      weight?: string; startAt?: string; isLoaded?: string;
+      weight?: string; startAt?: string; isLoaded?: string; profile?: string;
     };
 
     const sLat = parseFloat(startLat);
@@ -206,31 +206,51 @@ export async function itineraryRoutes(app: FastifyInstance) {
     const totalWeight = weight ? parseFloat(weight) : 12000;
     const atTime = startAt ? new Date(startAt) : new Date();
     const loaded = isLoaded === 'true';
+    const wantProfile = profileFlag === 'true';
 
     // 1. Instant: compute fast heuristic route
     const fast = await fastRoute(sLat, sLng, eLat, eLng, totalWeight, atTime, loaded);
 
     // 2. Try full A* with a short 5s timeout — if it succeeds, use the real path
+    let routeProfile: RouteProfile | null = null;
     const route = await Promise.race([
-      findRoute(sLat, sLng, eLat, eLng, totalWeight, atTime, loaded).catch(() => null),
+      findRoute(sLat, sLng, eLat, eLng, totalWeight, atTime, loaded, wantProfile ? (p) => { routeProfile = p; } : undefined).catch(() => null),
       new Promise<null>(r => setTimeout(() => r(null), 5000)),
     ]);
 
     if (route && route.geometry.length >= 2) {
-      return {
+      const response: Record<string, unknown> = {
         geometry: route.geometry,
         total_distance_m: route.totalDistance_m,
         total_time_s: route.totalTime_s,
         is_approximate: false,
       };
+      if (wantProfile && routeProfile) {
+        response.profile = routeProfile;
+      }
+      return response;
     }
 
     // 3. Fall back to fast heuristic result
-    return {
+    const response: Record<string, unknown> = {
       geometry: fast.geometry,
       total_distance_m: fast.total_distance_m,
       total_time_s: fast.total_time_s,
       is_approximate: true,
     };
+    if (wantProfile) {
+      response.profile = routeProfile;
+    }
+    return response;
+  });
+
+  // ── Cache management (for benchmarking) ──────────────────────
+  app.post('/cache/invalidate', async () => {
+    invalidateGraphCache();
+    return { ok: true, ...getCacheStatus() };
+  });
+
+  app.get('/cache/status', async () => {
+    return getCacheStatus();
   });
 }
